@@ -1,0 +1,139 @@
+ **********************************************************************
+ * Tema        : 2 - APD                                              *
+ * Autor       : Andrei Ursache                                       *
+ * Grupa       : 332 CA                                               *
+ * Data        : 21.11.2015                                           *
+ **********************************************************************
+ 
+ *  Aspecte generale **************************************************
+ 
+    Tema este realizata in Java si am folosit ideile de baza din laboratorul cu 
+Replicated Workers. Operatiile de Map si Reduce folosesc acelasi work pool din
+care iau taskuri si le executa un numar dat de workeri.
+    Arhiva contine fisierul build.xml, iar in urma rularii "ant compile jar" se 
+va creea fisierul "mapreduce.jar" care se ruleaza cu parametrii specificati in
+enunt.
+    Scalabilitatea va fi demonstrata in cele ce urmeaza.
+    
+    
+ *  Ideea generala ****************************************************
+ 
+    In realizarea temei am incercat sa am o abordare cat mai generala prin
+utilizarea genericitatii pentru WorkPool si Workers. De asemenea, am impartit 
+fisierele sursa in mai multe packages cu urmatoarele specificatii: 
+
+    MapReduce:    - Contine clasa de start a programului. Aici se creeaza 
+                workPool-ul;
+    Work:        - Se refera la partea de gestionare a threadurilor. Contine
+                WorkPool si Worker;
+    Results:    - Atat operatia de Map cat si cea de Reduce se finalizeaza cu 
+                un rezultat. Aici se gasesc cele doua tipuri;
+    Tasks:        - Pentru fiecare operatie in parte e nevoie de un anumit task.
+                Aici se afla atat clasa de baza pentru Task cat si 
+                implementarile pentru cele doua tipuri;
+    Utils:        - Diverse utilitare;
+    
+    Aplicatia are un singur workPool fizic. Acesta este putin modificat, astfel 
+incat mai intai se asteapta finalizarea tuturor task-urilor de tip Map, ca mai 
+apoi sa fie creeate cele de tip Reduce dupa care se incepe si executarea 
+acestora. Din punct de vedere logic, putem spune ca sunt doua workPool-uri 
+distincte.
+
+
+ *  Implementare ******************************************************
+    
+    In main-ul aplicatiei, se parseaza documentul primit ca input in linia de 
+comanda. Se creeaza un workPool si o lista de workers (de lungime egala cu 
+numarul de workeri primit ca parametru). Apoi se apeleaza metoda start() pentru
+fiecare worker in parte, dupa care se adauga in work pool task-uri de tip Map
+pentru fiecare document in parte. Dupa aceasta, se markeaza work pool-ul ca 
+fiind ready si workerii incep sa realizeze taskurile.
+    Pentru fiecare document in parte, am creeat atate taskuri de tip map cat e
+nevoie pentru a acoperi intreg fisierul. Pentru ultimul task (ce are de obicei
+de citit un fragment mai mic) am setat ca dimensiunea ce trebuie sa fie citita 
+sa fie de la offset pana la finalul documentului.
+
+    Task-urile de tip Map si Reduce mostenesc o casa de baza care contine numele
+documentului si o metoda abstracta "processTask()". Aceasta metoda va fi 
+implementata corespunzator pentru fiecare tip si reprezinta toate operatiile 
+pe care trebuie sa le faca acel task.
+    Task-ul de tip Map contine in plus offsetul, dimensiune fragmentului si un
+obiect de tip ResultMap (ce va contine rezultatul procesarii - un hashMap de tip
+lungime cuvant - numar de cuvinte si multimea de cuvinte maximale). Este nevoie
+sa retina cuvintele maximale, deoarece nu trebuie sa numere si duplicatele. 
+Cand acest task este procesat, el deschide documentul si sare la offsetul dat.
+Acolo verifica si caracterul anterior pentru a putea stabili daca e nevoie sa 
+"arunce" primul cuvant sau nu. Citeste intreg continutul documentului de a 
+offset la offset+fragmentDimension (sau pana la finalul documentului daca se 
+intalneste acest caz) intr-un array de tip byte. Face o decodificare pentru 
+"UTF-8" si apoi cu ajutorul StringTokenizer imparte textul in cuvinte. Pentru 
+fiecare cuvant in parte, update-eaza rezultatul sau. La final, verifica daca 
+trebuie sa citeasca in continuare cuvantul. Astfel, obtine un hashMap si o 
+multime de cuvinte maximale pentru fragmentul sau.
+    Task-ul de tip Reduce contine o lista de rezultate de tip Map (ce va fi 
+inputul sau) si un rezultat de tip Reduce (in care va imbina rezultatele map).
+Cand acest task este procesat, el parcurge lista de rezultate de tip map si 
+creeaza un singur hashMap de rezultate, precum si o singura multime de cuvinte 
+maximale.
+
+    Workers sunt implementati generic pentru obiecte de tip Task (ce contin
+metoda process Task). Ei implementeaza Thread si au o referinta la un WorkPool.
+Fiecare worker are o metoda processTask in cadrul careia, se proceseaza taskul 
+(in modul definit mai sus).
+    Metoda Run() este implementata cu ajutorul unei bucle while in care workerul
+cere un Task de la workPool. Daca primeste unul, il executa si pune rezultatul
+in lista de rezultate de la WorkPool, daca primeste null, isi icheie executia.
+
+    WorkPool-ul este si ea o clasa generica parametrizata in functie de Task.
+Aceasta clasa urmeaza modelul din laborator dar este putin modificata. Ea are
+o lista de Task-uri si o lista de Rezultate. Astfel, workerii vor primi task-uri
+din lista de taskuri si vor pune rezultatele in lista de rezultate. De aceasta 
+putWork() este diferita de putResult().
+    putWork() este apelata de thereadul principal la inceput cand se adauga
+toate task-urile de tip map. putResult() este apelata de fiecare worker dupa ce 
+termina de procesat un task.
+    Acest tip de workPool are doua flaguri: doneMap si doneRed ce indica in ce
+etapa se afla workPoolul. Astfel, cand se face un putResult() se verifica daca 
+etapa de Map tocmai s-a incheiat, in acest caz se va executa preceedToReduce().
+Aceasta functie ia toate rezultatele (care sunt de tip map) si le grupeaza pe
+documente si creeaza task-uri de tip Reduce pe care le introduce in lista de 
+task-uri.
+    In putResult(), daca tocmai s-a teminat etapa de Reduce, atunci se va afisa 
+in documentul de out continutul din lista de rezultate.
+    Astfel, din punct de vedere logic exista doua stari ale workPool-ului 
+determinate de cele doua flag-uri. Trecerea dintre cele doua stari este marcata
+de reintroducerea taskurilor si golirea listei de rezultate (adica creearea unui
+nou workPool logic), iar la final se vor folosi rezultatele din lista.
+
+
+ *  Scalabiilitate ****************************************************
+
+    Am masurat scalabilitatea pe laptopul pesonal pentru testul2A.txt.
+    Fiecare configuratie a fost rulata de 5 ori (pentru a calcula o valoare 
+medie corecta, afisata imediat dupa "=>"). 
+    Totodata, dupa valoarea medie este calculat si speedup-ul adus de 
+paralelizare (in paranteza).
+
+    Iata rezultatele:
+
+    Threads: 1
+    7.311   7.184   7.487   7.245   7.404   =>    7.3262
+    Threads: 2
+    4.354   4.383   4.358   4.357   5.331   =>    4.5566    (1.61)
+    Threads: 4
+    4.117   3.972   4.211   4.068   4.063   =>    4.0862    (1.80)
+
+    Se poate observa cu usurinta ca in cazul tuturor factorilor de scalare, 
+timpii sunt descrescatori in functie de numarul de thread-uri utilizate.
+    
+    Precizari:
+        - timpii sunt masurati in secunde;
+        - arhitectura: 6GB RAM, 4 core-uri.
+
+
+ *   (!!!)   Alte detalii referitoare la implementarea temei se gasesc in 
+            fisierele sursa.
+           
+
+    Andrei Ursache
+    
